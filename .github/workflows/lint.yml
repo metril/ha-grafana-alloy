@@ -1,0 +1,60 @@
+---
+name: Lint
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  addon-config:
+    name: Add-on config lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Lint add-on configuration
+        uses: frenck/action-addon-linter@v2
+        with:
+          path: "./grafana_alloy"
+
+  executable-bits:
+    name: Executable bit check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      # s6-overlay execs a service's `run` (and, for oneshots, `up`) script
+      # directly. If either is committed without the executable bit, the
+      # service silently fails to start inside the container - a mistake
+      # that's easy to make locally (an editor or `git add` on some
+      # platforms can save scripts as mode 644) and easy to miss until the
+      # add-on is actually deployed. Catch it here instead.
+      - name: Verify s6 run/up scripts are executable in git
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # git ls-files -s prints "<mode> <object> <stage>\t<path>" per
+          # entry. Find entries whose path ends in /run or /up but whose
+          # mode is 100644 (not executable). The trailing `|| true` is
+          # required because grep exits 1 when it finds nothing, which
+          # would otherwise be (mis)treated as this step failing.
+          offenders="$(git ls-files -s grafana_alloy/rootfs | grep -P '^100644\s+\S+\s+\d+\t\S*/(run|up)$' || true)"
+
+          if [[ -n "${offenders}" ]]; then
+            echo "::error::One or more s6-overlay run/up scripts are committed without the executable bit (mode 100644). s6-overlay will refuse to start the affected service(s)."
+            while IFS=$'\t' read -r _meta path; do
+              [[ -n "${path}" ]] || continue
+              echo "::error file=${path}::${path} is mode 100644 (not executable). Fix with: chmod +x ${path} && git update-index --chmod=+x ${path}"
+            done <<< "${offenders}"
+            exit 1
+          fi
+
+          echo "All s6 run/up scripts under grafana_alloy/rootfs are executable (mode 100755)."

@@ -1,0 +1,42 @@
+configuration:
+  loki_url:
+    name: Loki URL
+    description: The full push endpoint of your Grafana Loki instance, e.g. https://loki.example.com/loki/api/v1/push.
+  loki_username:
+    name: Loki username
+    description: Username for HTTP basic auth against Loki. Set together with Loki password, or leave both empty to disable basic auth.
+  loki_password:
+    name: Loki password
+    description: Password for HTTP basic auth against Loki. Never written to the on-disk configuration.
+  loki_tenant_id:
+    name: Loki tenant ID
+    description: Tenant / organization ID sent as X-Scope-OrgID, for multi-tenant Loki setups.
+  loki_ca_cert:
+    name: Loki CA certificate
+    description: PEM-encoded CA certificate to trust, for Loki endpoints using a private or self-signed certificate authority.
+  loki_server_name:
+    name: TLS server name override
+    description: Overrides the hostname used to validate Loki's TLS certificate, for when it does not match the URL you connect to.
+  loki_tls_skip_verify:
+    name: Skip TLS verification
+    description: Disables TLS certificate verification entirely. For debugging only; do not use in production.
+  instance_label:
+    name: Instance label
+    description: Adds an "instance" label to every log stream. Only needed to override the host name the journal already reports.
+  journal_max_age:
+    name: Journal max age
+    description: How far back into the systemd journal to read when the add-on starts, e.g. 24h.
+  journal_matches:
+    name: Journal match filter
+    description: A systemd journal match expression that limits which journal entries are shipped, e.g. _SYSTEMD_UNIT=hassio-supervisor.service.
+  log_level:
+    name: Log level
+    description: Alloy's own log verbosity - debug, info, warn, or error.
+  additional_config:
+    name: Additional configuration
+    description: Extra Alloy (River) configuration appended verbatim to the generated configuration, for advanced pipelines.
+  custom_config_path:
+    name: Custom configuration file
+    description: Filename of a complete hand-written config.alloy in this add-on's configuration folder, used instead of the generated configuration.
+network:
+  12345/tcp: Alloy web UI

@@ -1,0 +1,35 @@
+#!/command/with-contenv bashio
+# shellcheck shell=bash
+# ==============================================================================
+# Grafana Alloy add-on: alloy (longrun)
+#
+# Reads loki_password here rather than receiving it from init-alloy. Both
+# services run under with-contenv bashio and can query the Supervisor options
+# API independently, so the secret only ever lives in this process's
+# environment - inherited by Alloy on exec, and never rendered into
+# config.alloy.
+# ==============================================================================
+
+config_path="/etc/alloy/config.alloy"
+if bashio::config.has_value 'custom_config_path'; then
+    config_path="/config/$(bashio::config 'custom_config_path')"
+fi
+
+if bashio::config.has_value 'loki_password'; then
+    export LOKI_PASSWORD
+    LOKI_PASSWORD="$(bashio::config 'loki_password')"
+fi
+
+bashio::log.info "Starting Grafana Alloy (configuration: ${config_path})"
+
+# bashio caches the add-on options - including loki_password - under
+# /tmp/.bashio, and the bundled version writes that cache world-readable.
+# Nothing below needs bashio again, so drop it before handing over to Alloy.
+bashio::cache.flush_all
+
+# Alloy defaults to listening on 127.0.0.1, which is unreachable from outside
+# the container - the web UI and the add-on watchdog would both fail silently.
+exec /usr/bin/alloy run "${config_path}" \
+    --server.http.listen-addr=0.0.0.0:12345 \
+    --storage.path=/data/alloy \
+    --disable-reporting

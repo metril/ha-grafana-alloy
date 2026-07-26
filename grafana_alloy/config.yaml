@@ -1,0 +1,57 @@
+---
+name: "Grafana Alloy"
+version: "1.0.0"
+slug: "grafana_alloy"
+description: "Ship the Home Assistant system journal to Grafana Loki"
+url: "https://github.com/metril/ha-grafana-alloy"
+image: "ghcr.io/metril/ha-grafana-alloy"
+
+arch:
+  - amd64
+  - aarch64
+
+stage: experimental
+
+# s6-overlay v3 requires init: false, otherwise the container refuses to start.
+init: false
+
+# Start before Home Assistant Core so Core's own startup logs are captured.
+startup: services
+
+# Maps the host's systemd journal read-only into the container.
+journald: true
+
+map:
+  # Exposed as /config inside the container. Holds an optional hand-written
+  # config.alloy referenced by the custom_config_path option.
+  - addon_config:rw
+
+ports:
+  12345/tcp: 12345
+ports_description:
+  12345/tcp: "Alloy web UI - component graph and live debugging"
+
+# Health is reported through the Dockerfile's HEALTHCHECK directive, which
+# Supervisor consumes natively. The 'watchdog' key is obsolete.
+webui: "http://[HOST]:[PORT:12345]/"
+
+options:
+  loki_url: null
+  loki_tls_skip_verify: false
+  journal_max_age: "24h"
+  log_level: "info"
+
+schema:
+  loki_url: url
+  loki_username: "str?"
+  loki_password: "password?"
+  loki_tenant_id: "str?"
+  loki_ca_cert: "str?"
+  loki_server_name: "str?"
+  loki_tls_skip_verify: bool
+  instance_label: "str?"
+  journal_max_age: str
+  journal_matches: "str?"
+  log_level: "list(debug|info|warn|error)"
+  additional_config: "str?"
+  custom_config_path: "str?"

@@ -1,0 +1,254 @@
+#!/command/with-contenv bashio
+# shellcheck shell=bash
+# ==============================================================================
+# Grafana Alloy add-on: init-alloy (oneshot)
+#
+# Renders /etc/alloy/config.alloy from the add-on options on every start.
+#
+# This script never reads the value of loki_password - only whether it is set.
+# The generated config contains the literal text sys.env("LOKI_PASSWORD"), and
+# the alloy longrun supplies the actual secret through its own environment.
+# See ../alloy/run.
+# ==============================================================================
+
+readonly CONFIG_DIR="/etc/alloy"
+readonly CONFIG_FILE="${CONFIG_DIR}/config.alloy"
+readonly CONFIG_TMP="${CONFIG_FILE}.tmp"
+readonly CA_FILE="${CONFIG_DIR}/loki-ca.pem"
+
+mkdir -p "${CONFIG_DIR}" /data/alloy
+
+# ------------------------------------------------------------------------------
+# Locate the journal
+#
+# This must be passed to loki.source.journal explicitly. Without a 'path',
+# sd_journal opens the *local* journal, which it identifies by matching
+# /etc/machine-id against the journal's directory name - and add-on containers
+# have no /etc/machine-id, so nothing is ever read and the component still
+# reports healthy. Naming the directory makes sd_journal open it directly.
+#
+# Supervisor mounts both the persistent and volatile journal locations; which
+# one is populated depends on the host.
+# ------------------------------------------------------------------------------
+JOURNAL_PATH="/var/log/journal"
+if ! find "${JOURNAL_PATH}" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null | read -r _; then
+    JOURNAL_PATH="/run/log/journal"
+fi
+
+if ! find "${JOURNAL_PATH}" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null | read -r _; then
+    bashio::log.fatal "No systemd journal found in /var/log/journal or /run/log/journal."
+    bashio::log.fatal "This add-on requires the host journal to be mapped into the container."
+    bashio::exit.nok "Systemd journal unavailable."
+fi
+
+bashio::log.info "Reading the systemd journal from ${JOURNAL_PATH}"
+
+# ------------------------------------------------------------------------------
+# Validation the option schema cannot express
+# ------------------------------------------------------------------------------
+if bashio::config.has_value 'loki_username' \
+    && ! bashio::config.has_value 'loki_password'; then
+    bashio::log.fatal "'loki_username' is set but 'loki_password' is empty."
+    bashio::log.fatal "Set both to enable basic auth, or clear both to disable it."
+    bashio::exit.nok "Incomplete Loki authentication configuration."
+fi
+
+if bashio::config.has_value 'loki_password' \
+    && ! bashio::config.has_value 'loki_username'; then
+    bashio::log.fatal "'loki_password' is set but 'loki_username' is empty."
+    bashio::log.fatal "Set both to enable basic auth, or clear both to disable it."
+    bashio::exit.nok "Incomplete Loki authentication configuration."
+fi
+
+if bashio::config.true 'loki_tls_skip_verify'; then
+    bashio::log.warning "TLS certificate verification is DISABLED."
+    bashio::log.warning "Only use 'loki_tls_skip_verify' for debugging."
+fi
+
+# ------------------------------------------------------------------------------
+# custom_config_path short-circuits generation entirely
+# ------------------------------------------------------------------------------
+if bashio::config.has_value 'custom_config_path'; then
+    custom_config="/config/$(bashio::config 'custom_config_path')"
+
+    if ! bashio::fs.file_exists "${custom_config}"; then
+        bashio::log.fatal "'custom_config_path' points at ${custom_config}, which does not exist."
+        bashio::log.fatal "Place the file in this add-on's configuration folder."
+        bashio::exit.nok "Custom Alloy configuration not found."
+    fi
+
+    bashio::log.notice "Using custom configuration: ${custom_config}"
+    bashio::log.notice "The generated configuration is skipped entirely."
+    exit 0
+fi
+
+# ------------------------------------------------------------------------------
+# Optional CA certificate. Written to disk; the password never is.
+# ------------------------------------------------------------------------------
+if bashio::config.has_value 'loki_ca_cert'; then
+    bashio::log.info "Writing the supplied CA certificate to ${CA_FILE}"
+    bashio::config 'loki_ca_cert' > "${CA_FILE}"
+    chmod 0644 "${CA_FILE}"
+else
+    rm -f "${CA_FILE}"
+fi
+
+# ------------------------------------------------------------------------------
+# Render config.alloy
+#
+# Every user-supplied value goes through bashio::var.json_string (jq -Rs .).
+# Alloy's string literals use JSON-compatible escaping, so this both quotes
+# correctly and prevents a stray quote or backslash from breaking out of the
+# literal and injecting configuration.
+# ------------------------------------------------------------------------------
+render_config() {
+    cat <<-EOF
+	// Generated by the Grafana Alloy add-on - do not edit.
+	//
+	// This file is rewritten from the add-on options every time the add-on
+	// starts; manual edits are discarded. Use the Configuration tab, the
+	// 'additional_config' option, or 'custom_config_path' instead.
+
+	logging {
+	    level  = "$(bashio::config 'log_level')"
+	    format = "logfmt"
+	}
+
+	loki.relabel "journal" {
+	    forward_to = []
+
+	    rule {
+	        source_labels = ["__journal__systemd_unit"]
+	        target_label  = "unit"
+	    }
+
+	    rule {
+	        source_labels = ["__journal__hostname"]
+	        target_label  = "hostname"
+	    }
+
+	    rule {
+	        source_labels = ["__journal_syslog_identifier"]
+	        target_label  = "syslog_identifier"
+	    }
+
+	    rule {
+	        source_labels = ["__journal_container_name"]
+	        target_label  = "container_name"
+	    }
+
+	    rule {
+	        source_labels = ["__journal__transport"]
+	        target_label  = "transport"
+	    }
+
+	    rule {
+	        source_labels = ["__journal_priority_keyword"]
+	        target_label  = "level"
+	    }
+	}
+
+	loki.source.journal "systemd" {
+	    forward_to    = [loki.process.journal.receiver]
+	    relabel_rules = loki.relabel.journal.rules
+	    path          = "${JOURNAL_PATH}"
+	    max_age       = "$(bashio::config 'journal_max_age')"
+	    labels        = {
+	        job = "systemd-journal",
+	    }
+	EOF
+
+    if bashio::config.has_value 'journal_matches'; then
+        printf '    matches       = %s\n' \
+            "$(bashio::var.json_string "$(bashio::config 'journal_matches')")"
+    fi
+
+    cat <<-EOF
+	}
+
+	loki.process "journal" {
+	    forward_to = [loki.write.loki.receiver]
+
+	    stage.static_labels {
+	        values = {
+	            source = "journald",
+	        }
+	    }
+	}
+
+	loki.write "loki" {
+	    endpoint {
+	        url = $(bashio::var.json_string "$(bashio::config 'loki_url')")
+	EOF
+
+    if bashio::config.has_value 'loki_tenant_id'; then
+        printf '        tenant_id = %s\n' \
+            "$(bashio::var.json_string "$(bashio::config 'loki_tenant_id')")"
+    fi
+
+    if bashio::config.has_value 'loki_username'; then
+        cat <<-EOF
+
+		        basic_auth {
+		            username = $(bashio::var.json_string "$(bashio::config 'loki_username')")
+		            password = sys.env("LOKI_PASSWORD")
+		        }
+		EOF
+    fi
+
+    if bashio::config.has_value 'loki_ca_cert' \
+        || bashio::config.has_value 'loki_server_name' \
+        || bashio::config.true 'loki_tls_skip_verify'; then
+
+        printf '\n        tls_config {\n'
+
+        if bashio::config.has_value 'loki_ca_cert'; then
+            printf '            ca_file = "%s"\n' "${CA_FILE}"
+        fi
+
+        if bashio::config.has_value 'loki_server_name'; then
+            printf '            server_name = %s\n' \
+                "$(bashio::var.json_string "$(bashio::config 'loki_server_name')")"
+        fi
+
+        if bashio::config.true 'loki_tls_skip_verify'; then
+            printf '            insecure_skip_verify = true\n'
+        fi
+
+        printf '        }\n'
+    fi
+
+    printf '    }\n'
+
+    # The journal already carries the Home Assistant host's own name as the
+    # 'hostname' label, so 'instance' is only emitted when the user explicitly
+    # overrides it.
+    if bashio::config.has_value 'instance_label'; then
+        cat <<-EOF
+
+		    external_labels = {
+		        instance = $(bashio::var.json_string "$(bashio::config 'instance_label')"),
+		    }
+		EOF
+    fi
+
+    printf '}\n'
+
+    if bashio::config.has_value 'additional_config'; then
+        cat <<-EOF
+
+		// ---------------------------------------------------------------------
+		// additional_config - supplied verbatim from the add-on options
+		// ---------------------------------------------------------------------
+		EOF
+        # bashio::config emits no trailing newline.
+        bashio::config 'additional_config'
+        printf '\n'
+    fi
+}
+
+render_config > "${CONFIG_TMP}"
+chmod 0600 "${CONFIG_TMP}"
+mv -f "${CONFIG_TMP}" "${CONFIG_FILE}"
+
+bashio::log.info "Wrote ${CONFIG_FILE}"

@@ -1,0 +1,126 @@
+---
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  ARCHITECTURES: '["amd64", "aarch64"]'
+  IMAGE_NAME: ha-grafana-alloy
+  ADDON_DIR: grafana_alloy
+
+permissions:
+  contents: read
+
+jobs:
+  version-check:
+    name: Verify tag matches config.yaml version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      # Home Assistant Supervisor requires the published image tag to exactly
+      # equal config.yaml's `version:` (with no leading "v"). If the git tag
+      # and config.yaml disagree, we'd publish an image tag the add-on
+      # manifest never references, and Supervisor would fail to pull the
+      # update. Catch that here, before anything gets built or pushed.
+      - name: Compare release tag to config.yaml version
+        id: check
+        run: |
+          set -euo pipefail
+
+          tag_version="${GITHUB_REF_NAME#v}"
+          config_version="$(grep -m1 '^version:' "${ADDON_DIR}/config.yaml" | sed -E 's/^version:[[:space:]]*"?([^"[:space:]]*)"?[[:space:]]*$/\1/')"
+
+          if [[ -z "${config_version}" ]]; then
+            echo "::error::Could not find a 'version:' key in ${ADDON_DIR}/config.yaml"
+            exit 1
+          fi
+
+          if [[ "${tag_version}" != "${config_version}" ]]; then
+            echo "::error::Release tag 'v${tag_version}' does not match ${ADDON_DIR}/config.yaml version '${config_version}'. Home Assistant Supervisor requires the published image tag to exactly equal config.yaml's version (no 'v' prefix); publishing now would ship an image the add-on can never pull. Fix by tagging v${config_version}, or bump config.yaml's version to ${tag_version} and re-tag."
+            exit 1
+          fi
+
+          echo "Tag version 'v${tag_version}' matches ${ADDON_DIR}/config.yaml version '${config_version}'."
+          echo "version=${tag_version}" >> "$GITHUB_OUTPUT"
+
+  init:
+    name: Initialize build
+    needs: version-check
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Get build matrix
+        id: matrix
+        uses: home-assistant/builder/actions/prepare-multi-arch-matrix@2026.06.0
+        with:
+          architectures: ${{ env.ARCHITECTURES }}
+          image-name: ${{ env.IMAGE_NAME }}
+
+  build:
+    name: Build ${{ matrix.arch }} image
+    needs: [version-check, init]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # Needed for Cosign signing (issue OIDC token for signing)
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.init.outputs.matrix) }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Build and push image
+        uses: home-assistant/builder/actions/build-image@2026.06.0
+        with:
+          arch: ${{ matrix.arch }}
+          image: ${{ matrix.image }}
+          context: ${{ env.ADDON_DIR }}
+          version: ${{ needs.version-check.outputs.version }}
+          image-tags: |
+            ${{ needs.version-check.outputs.version }}
+            latest
+          push: "true"
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
+
+  manifest:
+    name: Publish multi-arch manifest
+    needs: [version-check, init, build]
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      id-token: write # Needed for Cosign signing (issue OIDC token for signing)
+    steps:
+      - name: Publish multi-arch manifest
+        uses: home-assistant/builder/actions/publish-multi-arch-manifest@2026.06.0
+        with:
+          architectures: ${{ env.ARCHITECTURES }}
+          image-name: ${{ env.IMAGE_NAME }}
+          image-tags: |
+            ${{ needs.version-check.outputs.version }}
+            latest
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
+
+  release:
+    name: Create GitHub release
+    needs: manifest
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
