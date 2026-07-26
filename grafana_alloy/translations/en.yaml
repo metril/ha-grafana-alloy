@@ -39,4 +39,4 @@ configuration:
     name: Custom configuration file
     description: Filename of a complete hand-written config.alloy in this add-on's configuration folder, used instead of the generated configuration.
 network:
-  12345/tcp: Alloy web UI
+  12345/tcp: Alloy web UI - unauthenticated, leave empty to keep internal-only

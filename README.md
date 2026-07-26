@@ -13,7 +13,7 @@ Ship the Home Assistant systemd journal to a Grafana Loki instance using Grafana
 - Optional HTTP basic auth; the password is kept out of the generated Alloy configuration file
 - Filter what gets shipped with systemd journal match expressions and a configurable retention window
 - `additional_config` and `custom_config_path` escape hatches for anything the options UI doesn't cover
-- Alloy's own web UI (component graph, live debugging) exposed on port 12345
+- Alloy's own web UI (component graph, live debugging), off by default and enabled per-install from the Network tab
 
 ## Installation
 

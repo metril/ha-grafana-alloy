@@ -1,6 +1,6 @@
 ---
 name: "Grafana Alloy"
-version: "1.0.0"
+version: "1.0.1"
 slug: "grafana_alloy"
 description: "Ship the Home Assistant system journal to Grafana Loki"
 url: "https://github.com/metril/ha-grafana-alloy"
@@ -26,10 +26,15 @@ map:
   # config.alloy referenced by the custom_config_path option.
   - addon_config:rw
 
+# Unpublished by default. The Alloy UI has no authentication and shows the
+# Loki URL and username (the password is redacted), so it is not put on the
+# network unless asked for. Assign a port in the Network tab to reach it.
+# Alloy still binds 0.0.0.0 inside the container so publishing works when
+# enabled; the healthcheck uses the container's own loopback either way.
 ports:
-  12345/tcp: 12345
+  12345/tcp: null
 ports_description:
-  12345/tcp: "Alloy web UI - component graph and live debugging"
+  12345/tcp: "Alloy web UI - unauthenticated (leave empty to keep internal-only)"
 
 # Health is reported through the Dockerfile's HEALTHCHECK directive, which
 # Supervisor consumes natively. The 'watchdog' key is obsolete.

@@ -114,7 +114,15 @@ For full control, place a complete `config.alloy` in this add-on's own configura
 
 ## Web UI
 
-Alloy's own web UI is available on port 12345 (`http://<host>:12345/`), showing the live component graph, per-component debug info, and metrics such as `sent_entries`. If `loki_password` is set, it is never shown in the UI - Alloy redacts values typed as secrets.
+Alloy has a built-in web UI showing the live component graph, per-component debug info, and counters such as `sent_entries`. **It is not published by default.**
+
+To reach it, open the add-on's **Network** tab, assign a host port to `12345/tcp` (12345 is fine), and save. Clear the field again when you're done.
+
+It is left off by default because the UI has **no authentication** - anything that can reach the port can read it - and its component view shows your `loki_url` and `loki_username` in plain text. Your `loki_password` is *not* shown: Alloy redacts secret-typed values, and the password reaches Alloy through an environment variable rather than the configuration file.
+
+You usually don't need it. Alloy writes every push failure to its own log, so the add-on's **Log** tab already covers everything in the troubleshooting table below. The UI is most useful when logs are silently not arriving and you want to see whether the journal source is producing entries at all.
+
+Enabling the port has no effect on the add-on's health reporting, which uses a Docker healthcheck on the container's internal loopback interface and works whether or not the port is published.
 
 ## How the Loki password is handled
 
