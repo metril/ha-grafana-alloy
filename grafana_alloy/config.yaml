@@ -1,6 +1,6 @@
 ---
 name: "Grafana Alloy"
-version: "1.0.1"
+version: "1.0.2"
 slug: "grafana_alloy"
 description: "Ship the Home Assistant system journal to Grafana Loki"
 url: "https://github.com/metril/ha-grafana-alloy"
@@ -10,7 +10,8 @@ arch:
   - amd64
   - aarch64
 
-stage: experimental
+# 'stage' is intentionally absent: it defaults to stable, and the add-on linter
+# rejects any key written out as its own default value.
 
 # s6-overlay v3 requires init: false, otherwise the container refuses to start.
 init: false

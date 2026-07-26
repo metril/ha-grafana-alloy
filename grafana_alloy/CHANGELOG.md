@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.2
+
+- Dropped the experimental flag; the add-on now shows as stable in the store.
+
 ## 1.0.1
 
 - The Alloy web UI is no longer published by default. It has no authentication
