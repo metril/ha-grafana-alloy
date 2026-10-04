@@ -41,14 +41,14 @@ loki.write "loki"   --HTTPS (basic auth, optional custom CA / SNI)-->  Traefik  
 - **journald-only by design.** No Home Assistant `/config` map, no `docker_api` access. The add-on's only inputs are the journal (via `journald: true`) and its own options; this keeps the attack surface and permission footprint minimal.
 - **`build.yaml` is deliberately absent.** Home Assistant retired it in the 2026-04 builder migration. The base image, OCI labels, and build args live directly in the `Dockerfile` instead.
 - **`home-assistant/builder@master` is NOT used.** It is deprecated and its root `action.yaml` no longer exists. CI uses the `home-assistant/builder/actions/*` composite actions, pinned to `2026.09.0`.
-- **Debian base, not Alpine.** The official Alloy binary is dynamically linked against glibc, and `loki.source.journal` needs `libsystemd`. `ghcr.io/home-assistant/base-debian:bookworm` ships both `libsystemd0` and `ca-certificates` already.
+- **Debian base, not Alpine.** The official Alloy binary is dynamically linked against glibc, and `loki.source.journal` needs `libsystemd`. `ghcr.io/home-assistant/base-debian:trixie` ships `ca-certificates`; `libsystemd0` is expected via apt's own dependency on it and the Dockerfile asserts `libsystemd.so.0` at build time because Alloy dlopen()s it (so `alloy --version` proves nothing about it).
 - **`instance` external label only emitted when `instance_label` is set.** The journal already supplies the Home Assistant host's own name as the `hostname` label, so adding `instance` unconditionally would just duplicate it for the common case.
 - **The Alloy web UI is unpublished by default** (`ports: 12345/tcp: null`), matching the `ha-ipmi-control` convention. It serves no authentication and discloses the Loki URL and username in its component view; the password is redacted (verified - the secret string appears nowhere in `/api/v0/web/components/loki.write.loki`). It is a troubleshooting convenience only: Alloy logs every push failure to stdout, so the add-on's Log tab already covers the documented failure modes.
 - **Health is a Docker `HEALTHCHECK`, not the `watchdog:` key.** The add-on linter rejects `watchdog:` as obsolete, and Supervisor reads the container's Docker health status natively (it drives the reported add-on state and restarts). The probe hits `/-/ready`, deliberately not `/-/healthy`: the latter turns unhealthy whenever Loki is unreachable, and restarting Alloy cannot fix a remote outage - it would just loop and discard the journal cursor.
 
 ## Add-on Details
 
-- Base image: `ghcr.io/home-assistant/base-debian:bookworm`
+- Base image: `ghcr.io/home-assistant/base-debian:trixie`
 - Alloy pinned to v1.20.1, downloaded from the GitHub release and SHA256-verified against that release's `SHA256SUMS`
 - s6-overlay v3 `s6-rc.d`: `init-alloy` (oneshot, renders config) → `alloy` (longrun, `alloy run`), wired via `dependencies.d`
 - `init: false` is mandatory - s6-overlay v3 refuses to start otherwise
@@ -56,7 +56,7 @@ loki.write "loki"   --HTTPS (basic auth, optional custom CA / SNI)-->  Traefik  
 
 ## CI/CD
 
-- `.github/workflows/lint.yml` - runs the Home Assistant add-on linter and an executable-bit check on every push and pull request
+- `.github/workflows/lint.yml` - runs the Home Assistant add-on linter, an executable-bit check, and an amd64 image build plus smoke test (base image, Alloy binary, libsystemd, s6/bashio, script syntax) on every push and pull request
 - `.github/workflows/release.yml` - runs on pushes to main touching `grafana_alloy/config.yaml`, on `v*` tags, and on manual dispatch: reads `version:`, skips if release `v<version>` already exists, and on a tag push asserts tag == version; builds both architectures, publishes the multi-arch manifest to ghcr.io, then creates the tag + GitHub Release via softprops. Tags pushed with `GITHUB_TOKEN` do not trigger workflows, so tag-only triggering cannot be automated.
 - Single `v*` tag scheme - there is no `addon-v*` scheme, since this repo has no companion integration
 

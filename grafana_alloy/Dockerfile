@@ -7,9 +7,9 @@
 # to a manual `docker build`.
 #
 # The base must be glibc-based: Grafana's Alloy binaries are dynamically
-# linked against glibc, and loki.source.journal needs libsystemd. Both
-# libsystemd0 and ca-certificates ship in base-debian already.
-ARG BUILD_FROM=ghcr.io/home-assistant/base-debian:bookworm
+# linked against glibc, and loki.source.journal needs libsystemd. base-debian
+# ships curl and ca-certificates; libsystemd0 is expected via apt's dependency on it; asserted below.
+ARG BUILD_FROM=ghcr.io/home-assistant/base-debian:trixie
 FROM ${BUILD_FROM}
 
 ARG BUILD_ARCH=amd64
@@ -57,6 +57,11 @@ RUN set -eu; \
 # Fails the build immediately on a wrong-architecture or corrupt binary,
 # rather than at the user's first install.
 RUN alloy --version
+
+# Alloy dlopen()s libsystemd.so.0 at runtime, so `alloy --version` succeeds
+# even when the library is missing and loki.source.journal would then fail.
+# Assert it is installed so a base-image change cannot break it silently.
+RUN ldconfig -p | grep -q 'libsystemd\.so\.0' || { echo "libsystemd.so.0 missing: loki.source.journal cannot load" >&2; exit 1; }
 
 # Supervisor reads the container's Docker health status directly: it drives the
 # add-on's reported state and its watchdog restarts. This replaces the obsolete

@@ -58,3 +58,50 @@ jobs:
           fi
 
           echo "All s6 run/up scripts under grafana_alloy/rootfs are executable (mode 100755)."
+
+  build:
+    name: Build amd64 image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      # No push, no signing (so no id-token) and no registry login: the image
+      # is only loaded into the local Docker engine as ghcr.io/...:ci.
+      # container-registry-password is a required input but unused here.
+      - name: Build image
+        uses: home-assistant/builder/actions/build-image@2026.09.0
+        with:
+          arch: amd64
+          image: ghcr.io/metril/ha-grafana-alloy
+          context: grafana_alloy
+          version: 0.0.0-ci
+          image-tags: ci
+          push: "false"
+          load: "true"
+          cosign: "false"
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Verifies the base image, the Alloy binary and the dlopen'd libsystemd
+      # on every PR; release.yml only builds after merge, so without this a
+      # broken base-image change would first surface on main.
+      - name: Smoke test image
+        run: |
+          docker run --rm --entrypoint "" ghcr.io/metril/ha-grafana-alloy:ci bash -euo pipefail -c '
+            . /etc/os-release; echo "Base: ${PRETTY_NAME}"
+            alloy --version
+            ldconfig -p | grep libsystemd.so.0
+            curl --version | head -1
+            # One command per line: under -e, a failure inside an && chain
+            # does not stop the script.
+            test -x /command/with-contenv
+            test -d /usr/lib/bashio
+            echo "s6-overlay + bashio present"
+            test -x /etc/s6-overlay/s6-rc.d/init-alloy/run
+            test -x /etc/s6-overlay/s6-rc.d/alloy/run
+            bash -n /etc/s6-overlay/s6-rc.d/init-alloy/run
+            bash -n /etc/s6-overlay/s6-rc.d/alloy/run
+          '

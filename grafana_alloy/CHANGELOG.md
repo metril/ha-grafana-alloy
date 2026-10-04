@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.1
+
+- Base image moved to Debian 13 (trixie), matching the current Home Assistant
+  base-image default.
+- The image is now built and smoke-tested in CI on every pull request.
+
 ## 1.1.0
 
 - Updated Grafana Alloy from 1.18.0 to 1.20.1.
