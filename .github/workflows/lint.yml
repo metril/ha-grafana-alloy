@@ -95,7 +95,13 @@ jobs:
             alloy --version
             ldconfig -p | grep libsystemd.so.0
             curl --version | head -1
-            test -x /command/with-contenv && test -d /usr/lib/bashio && echo "s6-overlay + bashio present"
-            test -x /etc/s6-overlay/s6-rc.d/init-alloy/run && test -x /etc/s6-overlay/s6-rc.d/alloy/run
-            bash -n /etc/s6-overlay/s6-rc.d/init-alloy/run && bash -n /etc/s6-overlay/s6-rc.d/alloy/run
+            # One command per line: under -e, a failure inside an && chain
+            # does not stop the script.
+            test -x /command/with-contenv
+            test -d /usr/lib/bashio
+            echo "s6-overlay + bashio present"
+            test -x /etc/s6-overlay/s6-rc.d/init-alloy/run
+            test -x /etc/s6-overlay/s6-rc.d/alloy/run
+            bash -n /etc/s6-overlay/s6-rc.d/init-alloy/run
+            bash -n /etc/s6-overlay/s6-rc.d/alloy/run
           '

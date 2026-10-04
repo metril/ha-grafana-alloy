@@ -8,7 +8,7 @@
 #
 # The base must be glibc-based: Grafana's Alloy binaries are dynamically
 # linked against glibc, and loki.source.journal needs libsystemd. base-debian
-# ships curl and ca-certificates; libsystemd0 arrives as an apt dependency.
+# ships curl and ca-certificates; libsystemd0 is expected via apt's dependency on it; asserted below.
 ARG BUILD_FROM=ghcr.io/home-assistant/base-debian:trixie
 FROM ${BUILD_FROM}
 
