@@ -40,7 +40,7 @@ loki.write "loki"   --HTTPS (basic auth, optional custom CA / SNI)-->  Traefik  
 - **The Loki password never lands in `config.alloy`.** `init-alloy` only checks whether `loki_password` is set - it never reads its value - and emits the literal text `sys.env("LOKI_PASSWORD")`. The `alloy` longrun reads the actual secret itself and exports it into its own process environment before `exec`ing Alloy. Be precise about the claim: bashio caches all options (password included) under `/tmp/.bashio` while reading them, and the bundled bashio writes that cache mode 0644, so `alloy/run` calls `bashio::cache.flush_all` before exec. The secret is unavoidably in the Alloy process environment. Nothing writes it to a mapped or persistent volume. Do not restate this as "never written to disk" - that is not what was verified.
 - **journald-only by design.** No Home Assistant `/config` map, no `docker_api` access. The add-on's only inputs are the journal (via `journald: true`) and its own options; this keeps the attack surface and permission footprint minimal.
 - **`build.yaml` is deliberately absent.** Home Assistant retired it in the 2026-04 builder migration. The base image, OCI labels, and build args live directly in the `Dockerfile` instead.
-- **`home-assistant/builder@master` is NOT used.** It is deprecated and its root `action.yaml` no longer exists. CI uses the `home-assistant/builder/actions/*` composite actions, pinned to `2026.06.0`.
+- **`home-assistant/builder@master` is NOT used.** It is deprecated and its root `action.yaml` no longer exists. CI uses the `home-assistant/builder/actions/*` composite actions, pinned to `2026.09.0`.
 - **Debian base, not Alpine.** The official Alloy binary is dynamically linked against glibc, and `loki.source.journal` needs `libsystemd`. `ghcr.io/home-assistant/base-debian:bookworm` ships both `libsystemd0` and `ca-certificates` already.
 - **`instance` external label only emitted when `instance_label` is set.** The journal already supplies the Home Assistant host's own name as the `hostname` label, so adding `instance` unconditionally would just duplicate it for the common case.
 - **The Alloy web UI is unpublished by default** (`ports: 12345/tcp: null`), matching the `ha-ipmi-control` convention. It serves no authentication and discloses the Loki URL and username in its component view; the password is redacted (verified - the secret string appears nowhere in `/api/v0/web/components/loki.write.loki`). It is a troubleshooting convenience only: Alloy logs every push failure to stdout, so the add-on's Log tab already covers the documented failure modes.
@@ -49,7 +49,7 @@ loki.write "loki"   --HTTPS (basic auth, optional custom CA / SNI)-->  Traefik  
 ## Add-on Details
 
 - Base image: `ghcr.io/home-assistant/base-debian:bookworm`
-- Alloy pinned to v1.18.0, downloaded from the GitHub release and SHA256-verified against that release's `SHA256SUMS`
+- Alloy pinned to v1.20.1, downloaded from the GitHub release and SHA256-verified against that release's `SHA256SUMS`
 - s6-overlay v3 `s6-rc.d`: `init-alloy` (oneshot, renders config) → `alloy` (longrun, `alloy run`), wired via `dependencies.d`
 - `init: false` is mandatory - s6-overlay v3 refuses to start otherwise
 - Supported architectures: `amd64`, `aarch64` only
@@ -57,18 +57,18 @@ loki.write "loki"   --HTTPS (basic auth, optional custom CA / SNI)-->  Traefik  
 ## CI/CD
 
 - `.github/workflows/lint.yml` - runs the Home Assistant add-on linter and an executable-bit check on every push and pull request
-- `.github/workflows/release.yml` - runs on `v*` tags: verifies the tag matches `config.yaml`'s `version:`, builds both architectures, publishes the multi-arch manifest to ghcr.io, then creates the GitHub Release
+- `.github/workflows/release.yml` - runs on pushes to main touching `grafana_alloy/config.yaml`, on `v*` tags, and on manual dispatch: reads `version:`, skips if release `v<version>` already exists, and on a tag push asserts tag == version; builds both architectures, publishes the multi-arch manifest to ghcr.io, then creates the tag + GitHub Release via softprops. Tags pushed with `GITHUB_TOKEN` do not trigger workflows, so tag-only triggering cannot be automated.
 - Single `v*` tag scheme - there is no `addon-v*` scheme, since this repo has no companion integration
 
 ## Common Gotchas
 
 1. **`loki.source.journal` must be given an explicit `path`.** Without one, `sd_journal` opens the *local* journal, which it identifies by matching `/etc/machine-id` against the journal directory's name. Add-on containers have no `/etc/machine-id`, so nothing is ever read - and the component still reports `healthy` with "journal tailer is running", so this fails completely silently. `init-alloy` detects `/var/log/journal`, falling back to `/run/log/journal`, and writes it into the config. Verified: 0 lines read without `path`, 1064 with it.
 2. s6 `run`/`up` scripts must be mode `100755` in git or the add-on silently fails to start - not visible in a normal diff. The lint workflow guards this; check it locally before pushing if scripts change.
-3. `config.yaml`'s `version:` must equal the published image tag exactly, with no `v` prefix.
+3. `config.yaml`'s `version:` must equal the published image tag exactly, with no `v` prefix. Bumping `version:` on main is the release trigger; config.yaml edits without a bump are a no-op skip. Never hand-create the GitHub Release first or the run will skip.
 4. ghcr.io package visibility. The v1.0.0 publish came out **public** with no manual step - verified by fetching the index, the amd64 child manifest, and its config blob from `ghcr.io/metril/ha-grafana-alloy` using an anonymous pull token (all HTTP 200). Older guidance says `GITHUB_TOKEN` pushes land private; that did not happen here. If Supervisor ever fails to pull with an opaque error, re-check with an anonymous token before assuming anything else is wrong.
 5. `--server.http.listen-addr=0.0.0.0:12345` is needed **only** for the web UI, not for the healthcheck. Alloy defaults to `127.0.0.1:12345`; Docker port publishing DNATs to the container's IP, so a loopback bind makes the published port unreachable. The `HEALTHCHECK` runs inside the container's own network namespace and passes on loopback regardless - verified by building a `127.0.0.1`-only variant, which reported `healthy` while the published port refused connections.
 6. The add-on linter errors on any `config.yaml` key set to its schema default, so `boot: auto` and `host_network: false` are deliberately omitted rather than written out explicitly.
-7. When upgrading Alloy, bump `ALLOY_VERSION` in the `Dockerfile` and `version` in `config.yaml` together.
+7. When upgrading Alloy, bump `ALLOY_VERSION` in the `Dockerfile` and `version` in `config.yaml` together. Merging that to main publishes the release automatically.
 
 ## Git Conventions
 

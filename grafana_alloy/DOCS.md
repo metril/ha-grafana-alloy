@@ -1,6 +1,6 @@
 # Grafana Alloy
 
-Ships the Home Assistant host's `systemd` journal to a Grafana Loki instance using [Grafana Alloy](https://grafana.com/docs/alloy/latest/) v1.18.0.
+Ships the Home Assistant host's `systemd` journal to a Grafana Loki instance using [Grafana Alloy](https://grafana.com/docs/alloy/latest/) v1.20.1.
 
 Because `journald: true` in this add-on's `config.yaml` maps the host's journal read-only into the container, that single journal already contains everything HAOS logs through systemd: Home Assistant Core, Supervisor, every other add-on's container, and host-level services. One add-on, one collector, the whole system's logs.
 

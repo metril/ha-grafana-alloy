@@ -3,8 +3,11 @@ name: Release
 
 on:
   push:
+    branches: [main]
+    paths: [grafana_alloy/config.yaml]
     tags:
       - "v*"
+  workflow_dispatch: {}
 
 env:
   ARCHITECTURES: '["amd64", "aarch64"]'
@@ -14,27 +17,41 @@ env:
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.workflow }}
+  cancel-in-progress: false
+
 jobs:
-  version-check:
-    name: Verify tag matches config.yaml version
+  version:
+    name: Read config.yaml version
+    # Guard manual dispatch: a run from a feature branch would otherwise push
+    # the `latest` image and create the release tag at that branch's commit.
+    if: github.ref == 'refs/heads/main' || github.ref_type == 'tag'
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.check.outputs.version }}
+      release: ${{ steps.check.outputs.release }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
 
       # Home Assistant Supervisor requires the published image tag to exactly
-      # equal config.yaml's `version:` (with no leading "v"). If the git tag
-      # and config.yaml disagree, we'd publish an image tag the add-on
-      # manifest never references, and Supervisor would fail to pull the
-      # update. Catch that here, before anything gets built or pushed.
-      - name: Compare release tag to config.yaml version
+      # equal config.yaml's `version:` (with no leading "v"). On a tag push,
+      # a mismatch would publish an image tag the add-on manifest never
+      # references, so catch that before anything gets built or pushed.
+      #
+      # Tags pushed with GITHUB_TOKEN don't trigger workflows, so the run
+      # triggered by the main push must build and then create the tag +
+      # release itself. The tag is created last, so a failed build leaves no
+      # orphan tag. We skip based on the existing RELEASE rather than the
+      # tag, which keeps reruns safe.
+      - name: Read config.yaml version and decide whether to release
         id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
-          tag_version="${GITHUB_REF_NAME#v}"
           config_version="$(grep -m1 '^version:' "${ADDON_DIR}/config.yaml" | sed -E 's/^version:[[:space:]]*"?([^"[:space:]]*)"?[[:space:]]*$/\1/')"
 
           if [[ -z "${config_version}" ]]; then
@@ -42,17 +59,33 @@ jobs:
             exit 1
           fi
 
-          if [[ "${tag_version}" != "${config_version}" ]]; then
-            echo "::error::Release tag 'v${tag_version}' does not match ${ADDON_DIR}/config.yaml version '${config_version}'. Home Assistant Supervisor requires the published image tag to exactly equal config.yaml's version (no 'v' prefix); publishing now would ship an image the add-on can never pull. Fix by tagging v${config_version}, or bump config.yaml's version to ${tag_version} and re-tag."
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            tag_version="${GITHUB_REF_NAME#v}"
+            if [[ "${tag_version}" != "${config_version}" ]]; then
+              echo "::error::Release tag 'v${tag_version}' does not match ${ADDON_DIR}/config.yaml version '${config_version}'. Home Assistant Supervisor requires the published image tag to exactly equal config.yaml's version (no 'v' prefix); publishing now would ship an image the add-on can never pull. Fix by tagging v${config_version}, or bump config.yaml's version to ${tag_version} and re-tag."
+              exit 1
+            fi
+          fi
+
+          # Only a "release not found" answer means we should publish; any
+          # other failure (auth, API outage) must not silently trigger a build.
+          if gh_err="$(gh release view "v${config_version}" --repo "$GITHUB_REPOSITORY" 2>&1 >/dev/null)"; then
+            echo "::notice::Skipped: release v${config_version} already exists."
+            release=false
+          elif grep -qi 'not found' <<< "${gh_err}"; then
+            release=true
+          else
+            echo "::error::Could not query releases: ${gh_err}"
             exit 1
           fi
 
-          echo "Tag version 'v${tag_version}' matches ${ADDON_DIR}/config.yaml version '${config_version}'."
-          echo "version=${tag_version}" >> "$GITHUB_OUTPUT"
+          echo "version=${config_version}" >> "$GITHUB_OUTPUT"
+          echo "release=${release}" >> "$GITHUB_OUTPUT"
 
   init:
     name: Initialize build
-    needs: version-check
+    needs: version
+    if: needs.version.outputs.release == 'true'
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
@@ -62,14 +95,15 @@ jobs:
 
       - name: Get build matrix
         id: matrix
-        uses: home-assistant/builder/actions/prepare-multi-arch-matrix@2026.06.0
+        uses: home-assistant/builder/actions/prepare-multi-arch-matrix@2026.09.0
         with:
           architectures: ${{ env.ARCHITECTURES }}
           image-name: ${{ env.IMAGE_NAME }}
 
   build:
     name: Build ${{ matrix.arch }} image
-    needs: [version-check, init]
+    needs: [version, init]
+    if: needs.version.outputs.release == 'true'
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -83,39 +117,41 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Build and push image
-        uses: home-assistant/builder/actions/build-image@2026.06.0
+        uses: home-assistant/builder/actions/build-image@2026.09.0
         with:
           arch: ${{ matrix.arch }}
           image: ${{ matrix.image }}
           context: ${{ env.ADDON_DIR }}
-          version: ${{ needs.version-check.outputs.version }}
+          version: ${{ needs.version.outputs.version }}
           image-tags: |
-            ${{ needs.version-check.outputs.version }}
+            ${{ needs.version.outputs.version }}
             latest
           push: "true"
           container-registry-password: ${{ secrets.GITHUB_TOKEN }}
 
   manifest:
     name: Publish multi-arch manifest
-    needs: [version-check, init, build]
+    needs: [version, init, build]
+    if: needs.version.outputs.release == 'true'
     runs-on: ubuntu-latest
     permissions:
       packages: write
       id-token: write # Needed for Cosign signing (issue OIDC token for signing)
     steps:
       - name: Publish multi-arch manifest
-        uses: home-assistant/builder/actions/publish-multi-arch-manifest@2026.06.0
+        uses: home-assistant/builder/actions/publish-multi-arch-manifest@2026.09.0
         with:
           architectures: ${{ env.ARCHITECTURES }}
           image-name: ${{ env.IMAGE_NAME }}
           image-tags: |
-            ${{ needs.version-check.outputs.version }}
+            ${{ needs.version.outputs.version }}
             latest
           container-registry-password: ${{ secrets.GITHUB_TOKEN }}
 
   release:
     name: Create GitHub release
-    needs: manifest
+    needs: [version, manifest]
+    if: needs.version.outputs.release == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -123,4 +159,7 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ needs.version.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: v${{ needs.version.outputs.version }}
           generate_release_notes: true

@@ -14,7 +14,7 @@ FROM ${BUILD_FROM}
 
 ARG BUILD_ARCH=amd64
 ARG BUILD_VERSION=0.0.0-dev
-ARG ALLOY_VERSION=1.18.0
+ARG ALLOY_VERSION=1.20.1
 
 LABEL \
     io.hass.name="Grafana Alloy" \
@@ -43,8 +43,8 @@ RUN set -eu; \
     base_url="https://github.com/grafana/alloy/releases/download/v${ALLOY_VERSION}"; \
     mkdir -p /tmp/alloy; \
     cd /tmp/alloy; \
-    curl -fsSL -O "${base_url}/${zip_name}"; \
-    curl -fsSL -O "${base_url}/SHA256SUMS"; \
+    curl -fsSL --retry 3 --retry-connrefused -O "${base_url}/${zip_name}"; \
+    curl -fsSL --retry 3 --retry-connrefused -O "${base_url}/SHA256SUMS"; \
     grep " ${zip_name}\$" SHA256SUMS | sha256sum -c -; \
     unzip -q "${zip_name}"; \
     install -m 0755 "alloy-linux-${alloy_arch}" /usr/bin/alloy; \
