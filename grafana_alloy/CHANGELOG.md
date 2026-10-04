@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.0
+
+- Updated Grafana Alloy from 1.18.0 to 1.20.1.
+- The Alloy download during image build now retries transient network errors.
+- Releases are now published automatically when `config.yaml`'s version changes on main.
+
 ## 1.0.2
 
 - Dropped the experimental flag; the add-on now shows as stable in the store.
